@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+
+# Generated data / artifacts
+data/
+models/
+
+# Runtime
+*.log
+*.egg-info/

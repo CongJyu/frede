@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Frede — Fake Review Analyzer</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <nav class="topnav">
+    <span class="brand">🔍 Frede</span>
+    <a href="/" class="active">Analyzer</a>
+    <a href="/hitl.html">HITL Evaluation</a>
+    <a href="/examples.html">Examples</a>
+  </nav>
+
+  <header class="page-head">
+    <h1>Fake Restaurant Review Detector</h1>
+    <p class="sub">Paste a restaurant review to see whether it's <strong>genuine</strong> or <strong>fake</strong> — and which words pushed the model's decision.</p>
+  </header>
+
+  <div id="health-banner" class="banner hidden"></div>
+
+  <main class="container">
+    <section class="card">
+      <label for="review">📝 Enter a Restaurant Review</label>
+      <textarea id="review" rows="6" placeholder="Type or paste a review here..."></textarea>
+      <div class="row" style="margin-top:10px;">
+        <button id="analyze" class="btn primary">🔍 Analyze Review</button>
+        <button id="clear" class="btn">🗑️ Clear</button>
+      </div>
+      <div class="samples">
+        <span class="muted">Try a sample:</span>
+        <div id="sample-btns" class="row wrap" style="margin-top:8px;"></div>
+      </div>
+    </section>
+
+    <section id="results" class="hidden"></section>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/analyzer.js"></script>
+</body>
+</html>
