@@ -50,6 +50,16 @@ def create_app() -> FastAPI:
             "error": ms.error,
         }
 
+    @app.middleware("http")
+    async def no_cache_spa(request, call_next):
+        # The SPA is a small set of static files that change between deploys —
+        # force revalidation so browsers never render a stale (pre-fix) version
+        # of the HTML/JS/CSS. API responses are left alone.
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     # Serve the static SPA last so /api/* routes take precedence.
     app.mount("/", StaticFiles(directory=config.FRONTEND_DIR, html=True), name="frontend")
     return app

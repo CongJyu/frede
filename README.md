@@ -10,34 +10,39 @@ people spot fake reviews.
 
 ## Stack
 
-- **Backend:** FastAPI (single worker), serving a JSON API + the static SPA.
-- **Frontend:** vanilla HTML/CSS/JS — no build step, no CDN.
+- **Backend:** FastAPI (single worker), serving a JSON API + the built frontend SPA.
+- **Frontend:** React + Ant Design, built with Vite (`frontend/` → `frontend/dist`, served by FastAPI). Node.js + npm required to build.
 - **ML:** PyTorch + HuggingFace `transformers`, `lime`, `captum` (IG), optional
   `shap` (precomputed examples only).
 
 ## Quick start
 
 ```bash
-# 1. Install dependencies (into the existing .venv)
+# 1. Install Python dependencies (into the existing .venv)
 uv pip install --python .venv/bin/python -e ".[all]"
+cd frontend && npm install && cd ..
 
-# 2. Verify the environment
+# 2. Verify the Python environment
 .venv/bin/python -m scripts.bootstrap
 
 # 3. One-time training (downloads ~0.3–0.6 GB data + ~250 MB model; ~15–45 min on CPU)
 make train
 
-# 4. Run the app
-make run            # -> http://127.0.0.1:8000
+# 4. Build the frontend, then run the app
+make run            # builds frontend/dist, then uvicorn on :8000 -> http://127.0.0.1:8000
 ```
 
 ## What you get
 
 | Page | URL | What it does |
 |---|---|---|
-| **Analyzer** | `/` | Paste a review → Real/Fake prediction, confidence, LIME-highlighted suspicious words, Reason Codes with evidence, LIME importance bars, Integrated-Gradients token coloring. |
-| **HITL** | `/hitl.html` | Two-pass evaluation (raw text, then the same reviews WITH XAI) recording judgments, confidence and feedback; results show human accuracy/precision/recall/F1 and Cohen's κ vs the model, per mode. |
-| **Examples** | `/examples.html` | Precomputed TP/TN/FP/FN reviews with LIME, IG and (if built) SHAP. |
+| **Analyzer** | `/#/` | Paste a review → Real/Fake prediction, confidence, LIME-highlighted suspicious words, Reason Codes with evidence, LIME importance bars, Integrated-Gradients token coloring. |
+| **HITL** | `/#/hitl` | Two-pass evaluation (raw text, then the same reviews WITH XAI) recording judgments, confidence and feedback; results show human accuracy/precision/recall/F1 and Cohen's κ vs the model, per mode. |
+| **Examples** | `/#/examples` | Precomputed TP/TN/FP/FN reviews with LIME, IG and (if built) SHAP. |
+
+Frontend dev mode (hot reload against the same API): `cd frontend && npm run dev`,
+then open `http://localhost:5173`. The dev server proxies `/api` only if you
+configure `server.proxy` in `frontend/vite.config.js`.
 
 ## API
 

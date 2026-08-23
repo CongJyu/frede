@@ -210,6 +210,43 @@ def train(args: argparse.Namespace):
     return model, tokenizer, device, (X_test, y_test), (all_preds, all_labels), all_probs
 
 
+def _extras_only(args: argparse.Namespace) -> None:
+    """Rebuild HITL pool + examples from the saved checkpoint (no retraining)."""
+    import pandas as pd
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    from . import examples, hitl_pool
+
+    if not tc.OUTPUT_DIR.exists():
+        raise SystemExit(f"No saved model at {tc.OUTPUT_DIR}. Run `make train` first.")
+
+    split_df = pd.read_csv(tc.DATA_DIR / "splits.csv")
+    test_df = split_df[split_df["split"] == "test"]
+    X_test = test_df["text"].tolist()
+    y_test = test_df["label"].astype(int).tolist()
+
+    device = torch.device(args.device)
+    if device.type == "cpu":
+        torch.set_num_threads(tc.NUM_THREADS)
+
+    tokenizer = AutoTokenizer.from_pretrained(str(tc.OUTPUT_DIR))
+    model = AutoModelForSequenceClassification.from_pretrained(str(tc.OUTPUT_DIR))
+    model.to(device)
+    model.eval()
+
+    all_probs = predict_probs(model, tokenizer, device, X_test, args.max_len, args.batch)
+    all_preds = (all_probs >= 0.5).astype(int).tolist()
+    all_labels = y_test
+
+    hitl_pool.build_hitl_pool(model, tokenizer, device, X_test, y_test, all_preds, all_probs)
+    examples.build_examples(
+        model, tokenizer, device, X_test, y_test,
+        all_preds, all_probs, all_labels,
+        with_shap=args.with_shap,
+    )
+    print("== extras regeneration complete ==")
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Fine-tune the frede detector.")
     parser.add_argument("--sample", type=int, default=tc.SAMPLE_N)
@@ -223,7 +260,13 @@ def main(argv=None) -> None:
                         help="skip HITL pool + examples (training only)")
     parser.add_argument("--with-shap", action="store_true",
                         help="precompute SHAP for the Examples page (slow on CPU)")
+    parser.add_argument("--extras-only", action="store_true",
+                        help="skip training; rebuild HITL pool + examples from the saved model")
     args = parser.parse_args(argv)
+
+    if args.extras_only:
+        _extras_only(args)
+        return
 
     model, tokenizer, device, (X_test, y_test), (all_preds, all_labels), all_probs = train(args)
 

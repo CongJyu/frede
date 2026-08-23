@@ -7,7 +7,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 MODEL_DIR = PROJECT_ROOT / "models"
-FRONTEND_DIR = PROJECT_ROOT / "frontend"
+# Built React + Ant Design SPA (Vite output). Build with `make frontend`.
+FRONTEND_DIR = PROJECT_ROOT / "frontend" / "dist"
 
 MODEL_PATH = MODEL_DIR / "fake_review_distilbert"
 LABEL_MAP_PATH = MODEL_DIR / "label_map.json"

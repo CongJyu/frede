@@ -91,7 +91,7 @@ class ReviewExplanation:
         lines = [
             sep,
             f"Text     : {self.text[:200]}{'...' if len(self.text) > 200 else ''}",
-            f"Predicted: {'⚠ FAKE' if self.predicted == 1 else '✓ REAL'} "
+            f"Predicted: {'FAKE' if self.predicted == 1 else 'REAL'} "
             f"(P(Fake)={self.fake_prob:.3f})  |  "
             f"True: {'FAKE' if self.true_label == 1 else 'REAL'}",
         ]

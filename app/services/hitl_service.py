@@ -95,7 +95,7 @@ class HitlService:
 
         status = "Ready"
         if done:
-            status = "🎉 All evaluations complete! View the results."
+            status = "All evaluations complete! View the results."
         return {
             "mode": self.mode,
             "pass_label": "WITHOUT XAI (baseline)" if self.mode == "no_xai" else "WITH XAI",
@@ -134,9 +134,9 @@ class HitlService:
                 self.mode = "with_xai"
                 self.current_idx = 0
                 self.start_time = time.time()
-                status = "✅ Baseline phase complete! Now reviewing WITH XAI explanations."
+                status = "Baseline phase complete! Now reviewing WITH XAI explanations."
             elif self.current_idx >= len(self.pool):
-                status = "🎉 All evaluations complete! Check the results below."
+                status = "All evaluations complete! Check the results below."
             else:
                 status = f"Recorded. Moving to sample {self.current_idx + 1}."
 
@@ -188,11 +188,12 @@ class HitlService:
         with_xai = metrics["with_xai"]
         delta_acc = with_xai["human_accuracy"] - without["human_accuracy"]
         delta_f1 = with_xai["human_f1"] - without["human_f1"]
-        arrow = lambda d: "↑" if d > 0.001 else ("↓" if d < -0.001 else "→")  # noqa: E731
+        acc_dir = "improved" if delta_acc > 0.001 else ("declined" if delta_acc < -0.001 else "was unchanged")
+        f1_dir = "improved" if delta_f1 > 0.001 else ("declined" if delta_f1 < -0.001 else "was unchanged")
         return (
-            f"Human accuracy improved by **{delta_acc:+.1%}** {arrow(delta_acc)} "
-            f"and F1 by **{delta_f1:+.1%}** {arrow(delta_f1)} when XAI explanations "
-            f"were shown (with-XAI decision time {with_xai['avg_time']:.1f}s vs "
+            f"Human accuracy {acc_dir} by **{abs(delta_acc):.1%}** and F1 {f1_dir} "
+            f"by **{abs(delta_f1):.1%}** when XAI explanations were shown "
+            f"(with-XAI decision time {with_xai['avg_time']:.1f}s vs "
             f"{without['avg_time']:.1f}s)."
         )
 

@@ -1,0 +1,78 @@
+/* Custom styles for the parts antd doesn't cover: bars, token coloring,
+   highlighted text, and the HITL review card. Theme-aware via antd CSS
+   variables (ConfigProvider cssVar: true). */
+
+/* Full-bleed page: no default browser margin, so no white frame around the app. */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--ant-color-bg-layout, #f5f6f8);
+}
+
+.muted {
+  color: var(--ant-color-text-secondary, #6b7280);
+  font-size: 13px;
+}
+
+/* ---- signed horizontal bars (LIME / SHAP) ---- */
+.bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.bar-label {
+  width: 130px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bar-track {
+  flex: 1;
+  height: 14px;
+  background: var(--ant-color-fill-tertiary, #eef1f4);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+}
+.bar-val {
+  width: 55px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- integrated-gradients token coloring ---- */
+.ig-token {
+  display: inline-block;
+  padding: 2px 4px;
+  margin: 1px;
+  border-radius: 3px;
+  font-size: 14px;
+}
+.tokens {
+  line-height: 2.1;
+}
+
+/* ---- HITL review text ---- */
+.review-text {
+  white-space: pre-wrap;
+  font-size: 15px;
+}
+
+/* Backend-produced highlighted HTML has an inline legend with a hardcoded
+   gray — force it to the theme's secondary-text color so it reads in dark mode. */
+.highlighted-html p {
+  color: var(--ant-color-text-secondary, #6b7280) !important;
+}
+.highlighted-html > * {
+  max-width: 100%;
+}

@@ -11,3 +11,7 @@ models/
 # Runtime
 *.log
 *.egg-info/
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/

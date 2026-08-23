@@ -87,7 +87,7 @@ def get_ig_attributions(
         return_convergence_delta=True,
     )
 
-    # Sum over embedding dim → (seq_len,), then drop padding tokens.
+    # Sum over embedding dim to (seq_len,), then drop padding tokens.
     attr = attributions.squeeze(0).sum(dim=-1).detach().cpu().numpy()
     mask = attention_mask.squeeze(0).cpu().numpy().astype(bool)
     tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze(0).cpu().numpy())
@@ -133,14 +133,14 @@ def build_highlighted_html(text: str, lime_features: list) -> str:
     parts.append("</div>")
     parts.append(
         '<p style="font-size:12px; color:#666; margin-top:8px;">'
-        "🔴 Red = pushes toward FAKE &nbsp;|&nbsp; "
-        "🔵 Blue = pushes toward REAL &nbsp;|&nbsp; Hover for LIME weight</p>"
+        "Red = pushes toward FAKE | "
+        "Blue = pushes toward REAL | Hover for LIME weight</p>"
     )
     return "".join(parts)
 
 
 def run_analysis(review_text: str) -> dict:
-    """Full pipeline: preprocess → predict → LIME → IG → reason codes → HTML."""
+    """Full pipeline: preprocess, predict, LIME, IG, reason codes, HTML."""
     start = time.time()
     ms = get_model_service()
 
