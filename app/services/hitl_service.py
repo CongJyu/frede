@@ -1,12 +1,18 @@
 """Server-side two-phase Human-in-the-Loop session + metrics.
 
-Port of notebook Phase 4 Parts 2–3. Evaluators first review a balanced sample
-pool WITHOUT any explanation, then review the SAME pool WITH XAI highlights and
-reason codes. Judgments are persisted to CSV; results aggregate human accuracy
-(vs ground truth) and Cohen's κ (human vs model) per mode.
+Evaluators first judge a balanced sample pool WITHOUT any explanation, then
+judge the SAME pool WITH XAI highlights and reason codes. Judgments persist to
+CSV; results aggregate human accuracy against ground truth and Cohen's κ against
+the model, per mode. The research question — do explanations help people — is
+unchanged from the original study.
 
-The sample pool is loaded lazily so the rest of the app (Analyzer, Examples)
-works even before `make train` has produced it.
+What changed is the task. Participants now decide **human-written vs
+machine-written**, and ground truth is actual authorship: real Yelp reviews on
+one side, verified model output on the other. The previous study asked
+"fake or real?" where "fake" meant 1–2 stars, so its accuracy measured agreement
+with a sentiment proxy rather than with authorship.
+
+The pool is loaded lazily so the rest of the app works before it is built.
 """
 from __future__ import annotations
 
@@ -27,8 +33,8 @@ from sklearn.metrics import (
 from .. import config
 
 _CSV_COLUMNS = [
-    "sample_idx", "original_idx", "true_label", "model_pred", "human_judgment",
-    "human_confidence", "mode", "time_seconds", "feedback", "fake_prob",
+    "sample_idx", "record_id", "true_label", "model_pred", "human_judgment",
+    "human_confidence", "mode", "time_seconds", "feedback", "machine_prob",
 ]
 
 
@@ -53,7 +59,8 @@ class HitlService:
             return
         if not config.HITL_POOL_PATH.exists():
             raise HitlUnavailableError(
-                f"HITL pool missing at {config.HITL_POOL_PATH}. Run `make train` first."
+                f"HITL pool missing at {config.HITL_POOL_PATH}. "
+                f"Run `make stage4` first."
             )
         with open(config.HITL_POOL_PATH, encoding="utf-8") as f:
             self.pool = json.load(f)["samples"]
@@ -114,15 +121,17 @@ class HitlService:
             elapsed = time.time() - self.start_time
             record = {
                 "sample_idx": self.current_idx,
-                "original_idx": s["idx"],
+                "record_id": s.get("record_id", s["idx"]),
                 "true_label": s["true_label"],
                 "model_pred": s["model_pred"],
-                "human_judgment": 1 if judgment == "Fake" else 0,
+                # 1 = the participant said machine-written, matching the label
+                # convention throughout (1 = machine, 0 = human).
+                "human_judgment": 1 if judgment == "Machine" else 0,
                 "human_confidence": confidence,
                 "mode": self.mode,
                 "time_seconds": round(elapsed, 1),
                 "feedback": feedback,
-                "fake_prob": s["fake_prob"],
+                "machine_prob": s["machine_prob"],
             }
             self.judgments.append(record)
             self._append_csv(record)
@@ -134,7 +143,7 @@ class HitlService:
                 self.mode = "with_xai"
                 self.current_idx = 0
                 self.start_time = time.time()
-                status = "Baseline phase complete! Now reviewing WITH XAI explanations."
+                status = "Baseline phase complete! Now judging the same reviews WITH XAI."
             elif self.current_idx >= len(self.pool):
                 status = "All evaluations complete! Check the results below."
             else:

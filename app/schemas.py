@@ -11,21 +11,27 @@ class AnalyzeRequest(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
-    prediction: str          # "FAKE" | "REAL"
+    prediction: str          # "MACHINE" | "HUMAN"
     predicted: int           # 1 | 0
-    fake_prob: float
+    machine_prob: float
     confidence: float
-    lime_features: list[dict[str, Any]]
-    ig_tokens: list[str]
-    ig_attrs: list[float]
+    # `flagged` applies the threshold calibrated at 1% false-positive rate on
+    # training folds; `predicted` uses the plain 0.5 boundary. They can differ.
+    flagged: bool
+    threshold: float
+    features: list[dict[str, Any]]   # name, value, human_percentile, shap, direction
+    tokens: list[str]
+    logprobs: list[float]
     highlighted_html: str
     reason_codes: list[dict[str, Any]]
     summary: str
     elapsed_ms: int
+    scope_note: str          # single-generator limitation, surfaced in the UI
 
 
 class JudgmentRequest(BaseModel):
-    judgment: str = Field(..., pattern="^(Real|Fake)$")
+    # 1 = machine-written, 0 = human-written — the same convention as the labels.
+    judgment: str = Field(..., pattern="^(Human|Machine)$")
     confidence: int = Field(..., ge=1, le=5)
     feedback: str = ""
 

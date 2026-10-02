@@ -1,11 +1,21 @@
-"""Training-time configuration (independent of app/config.py)."""
+"""Training-time configuration.
+
+Holds the fine-tuning settings for the archived sentiment-proxy pipeline. The
+data paths are imported from `app/config.py` rather than repeated here: they are
+read by both the training builders and the serving routes, and two hand-kept
+copies of the same path drift apart silently.
+"""
 from __future__ import annotations
 
-from pathlib import Path
+from app.config import (  # noqa: F401  (re-exported for training-side callers)
+    DATA_DIR,
+    EXAMPLES_PATH,
+    HITL_POOL_PATH,
+    HITL_RESULTS_PATH,
+    MODEL_DIR,
+    PROJECT_ROOT,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-MODEL_DIR = PROJECT_ROOT / "models"
 HF_CACHE_DIR = DATA_DIR / "hf_cache"
 
 BASE_MODEL_NAME = "distilbert-base-uncased"
@@ -30,5 +40,3 @@ DEVICE = "mps"  # "cpu" (default) or "mps"
 # HITL pool
 HITL_N_SAMPLES = 20
 HITL_SEED = 123
-LIME_NUM_FEATURES = 10
-LIME_NUM_SAMPLES = 300  # offline — can afford the notebook default

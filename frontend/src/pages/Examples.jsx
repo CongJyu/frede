@@ -1,20 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Alert, Card, Col, Row, Space, Tag, Typography } from 'antd';
 import { api, fmtPct } from '../api';
+import FeatureTable from '../components/FeatureTable';
 import ReasonCodes from '../components/ReasonCodes';
-import SignedBars from '../components/SignedBars';
-import TokenSpans from '../components/TokenSpans';
 
 const { Title, Paragraph, Text } = Typography;
 
-function shapItems(example) {
-  if (!example.shap) return null;
-  return example.shap.tokens
-    .map((tok, j) => ({ label: tok, value: example.shap.values[j] }))
-    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
-    .slice(0, 20);
-}
-
+/* One worked case per quadrant of the confusion matrix, so the page shows the
+   detector's failure modes and not only its successes. */
 export default function Examples() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -28,83 +21,96 @@ export default function Examples() {
   return (
     <div>
       <Title level={2} style={{ marginTop: 4 }}>
-        Precomputed Explanations
+        Worked examples
       </Title>
       <Paragraph type="secondary">
-        Representative test reviews with LIME, Integrated Gradients, and SHAP (precomputed offline —
-        SHAP is too slow to run live).
+        One case from each corner of the confusion matrix, from the held-out split only. Correct
+        calls show the most confident instance; errors show the one closest to the decision
+        boundary, which is where the reasoning actually gives way.
       </Paragraph>
 
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
 
+      {data && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`Decision threshold ${fmtPct(data.threshold)} — the cut calibrated to hold false positives on real reviews at 1%, measured over ${data.n_evaluated} held-out reviews.`}
+        />
+      )}
+
       {data &&
-        data.examples.map((e, i) => {
-          const isFake = e.model_pred === 1;
-          const shap = shapItems(e);
+        data.missing_cases &&
+        data.missing_cases.map((m) => (
+          <Alert
+            key={m.key}
+            type="success"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={`No example for "${m.title}"`}
+            description="The detector produced no such case on the held-out split — at this operating point it flagged no real reviewer. That is the result, not a gap in the page."
+          />
+        ))}
+
+      {data &&
+        data.examples.map((e) => {
+          const isMachine = e.model_pred === 1;
+          const correct = e.model_pred === e.true_label;
           return (
             <Card
-              key={i}
+              key={e.key}
               style={{ marginBottom: 16 }}
               title={
                 <Space style={{ width: '100%', justifyContent: 'space-between', display: 'flex' }}>
                   <span>{e.title}</span>
-                  <Tag color={isFake ? 'red' : 'green'}>
-                    Model: {isFake ? 'FAKE' : 'REAL'} · truth: {e.true_label === 1 ? 'FAKE' : 'REAL'}
-                  </Tag>
+                  <Space>
+                    <Tag color={correct ? 'green' : 'orange'}>
+                      {correct ? 'model correct' : 'model error'}
+                    </Tag>
+                    <Tag color={isMachine ? 'red' : 'blue'}>
+                      called {isMachine ? 'MACHINE' : 'HUMAN'}
+                    </Tag>
+                  </Space>
                 </Space>
               }
             >
-              <Text type="secondary">P(Fake) = {fmtPct(e.fake_prob)}</Text>
+              <Text type="secondary">
+                P(machine) = <Text strong>{fmtPct(e.machine_prob)}</Text> · truth:{' '}
+                <Text strong>{e.true_label === 1 ? 'machine-written' : 'human-written'}</Text> ·
+                condition: <Text code>{e.condition}</Text>
+              </Text>
               <p className="review-text" style={{ marginTop: 8 }}>
                 {e.text}
               </p>
 
               <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
                 <Col xs={24} lg={12}>
-                  <Text strong>Reason codes</Text>
-                  <div style={{ marginTop: 8 }}>
-                    <ReasonCodes items={e.reason_codes} />
-                  </div>
-                </Col>
-                <Col xs={24} lg={12}>
-                  <Text strong>Highlighted text (LIME)</Text>
+                  <Text strong>Token predictability</Text>
                   <div
                     className="highlighted-html"
                     dangerouslySetInnerHTML={{ __html: e.highlighted_html }}
                     style={{ marginTop: 8 }}
                   />
                 </Col>
-              </Row>
-
-              <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
                 <Col xs={24} lg={12}>
-                  <Text strong>Feature importance (LIME)</Text>
+                  <Text strong>Reason codes</Text>
                   <div style={{ marginTop: 8 }}>
-                    <SignedBars
-                      items={e.lime_features.map((f) => ({ label: f.word, value: f.weight }))}
-                    />
-                  </div>
-                </Col>
-                <Col xs={24} lg={12}>
-                  <Text strong>Integrated Gradients</Text>
-                  <div style={{ marginTop: 8 }}>
-                    <TokenSpans tokens={e.ig_tokens} attrs={e.ig_attrs} hint={false} />
+                    <ReasonCodes items={e.reason_codes} />
                   </div>
                 </Col>
               </Row>
 
               <div style={{ marginTop: 16 }}>
-                <Text strong>SHAP — token attribution (Fake class)</Text>
+                <Text strong>Feature contributions</Text>
                 <div style={{ marginTop: 8 }}>
-                  {shap ? (
-                    <SignedBars items={shap} />
-                  ) : (
-                    <Text type="secondary">
-                      SHAP not precomputed for this run (see `make train --with-shap`).
-                    </Text>
-                  )}
+                  <FeatureTable items={e.features} />
                 </div>
               </div>
+
+              <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+                {e.summary}
+              </Paragraph>
             </Card>
           );
         })}

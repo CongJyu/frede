@@ -28,6 +28,27 @@ _STOP_WORDS = frozenset(ENGLISH_STOP_WORDS) - _KEEP_WORDS
 
 _TOKEN_RE = re.compile(r"[a-z']+")
 
+# `Yelp/yelp_review_full` stores paragraph breaks as the two literal characters
+# backslash-n rather than as newlines: 52% of reviews contain them and 0%
+# contain a real newline. Left alone this is a silent catastrophe for
+# machine-text detection — freshly generated machine text never carries the
+# artefact, so "contains \n" separates the classes almost perfectly while
+# measuring nothing about authorship. Normalise before any model sees the text.
+_ESCAPE_MAP = ((r"\r\n", "\n"), (r"\n", "\n"), (r"\r", "\n"), (r"\t", "\t"))
+
+
+def normalize_escapes(text: str) -> str:
+    """Turn literal escape sequences from the Yelp corpus into real characters.
+
+    Applied identically to human sources and generated text so neither class
+    carries a dataset artefact the other lacks.
+    """
+    if not isinstance(text, str):
+        return text
+    for escaped, real in _ESCAPE_MAP:
+        text = text.replace(escaped, real)
+    return text
+
 
 def _tokenize(text: str) -> list[str]:
     """Word tokens (lowercased) — consistent with the cleaned lowercase text."""

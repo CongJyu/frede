@@ -13,12 +13,13 @@ dependencies = [
     "scikit-learn>=1.6",
     "scipy>=1.13",
     "pandas>=2.2",
-    "lime>=0.2.0",
-    "captum>=0.7",
     "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]
+# `datasets` is needed to fetch the Yelp corpus; `shap` is required by the
+# serving path, not optional — the detector service builds a TreeExplainer at
+# startup. The `all` extra is what `make install` uses.
 dataset = ["datasets>=3.0"]
 shap = ["shap>=0.46", "numba"]
 all = ["datasets>=3.0", "shap>=0.46", "numba"]
@@ -28,4 +29,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["app", "app.routers", "app.services", "training", "scripts"]
+packages = ["app", "app.routers", "app.services", "training", "detect", "scripts"]

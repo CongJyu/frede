@@ -1,123 +1,102 @@
-"""Precompute Examples-page data: TP/TN/FP/FN samples with IG + LIME + SHAP.
+"""Precompute Examples-page data: one TP / TN / FP / FN case with explanations.
 
-SHAP is computed offline here (partition explainer) because it is far too slow
-to run per-request. If shap/numba are unavailable, the page degrades to IG+LIME.
+The four cases are the ones worth looking at — two the detector gets right and
+two it gets wrong, so the page shows the failure modes rather than only the
+successes. Explanations come from the same `run_analysis` the Analyzer uses, so
+nothing here can drift from what the live tool reports.
+
+Examples are chosen from the held-out split only. Picking from training data
+would show the page cases the detector has already memorised.
+
+Usage:
+    python -m training.examples [--generator mimo-v2.5-rerun]
 """
 from __future__ import annotations
 
+import argparse
 import json
 
 import numpy as np
-from lime.lime_text import LimeTextExplainer
 
-from app.reason_codes import generate_reason_codes, reason_code_items
-from app.services.xai_service import build_highlighted_html, get_ig_attributions
-from . import config as tc
-from .hitl_pool import make_predictor
+from detect.dataset import build
+from training import config as tc
 
-
-def _make_shap_explainer(predictor):
-    try:
-        import shap
-        from shap.maskers import Text as ShapTextMasker
-
-        return shap.Explainer(
-            predictor,
-            ShapTextMasker(tokenizer=r"\s+"),
-            output_names=["Real", "Fake"],
-            algorithm="partition",
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[SHAP unavailable, skipping: {exc}]")
-        return None
+# Case, true label, predicted label, title, and how to pick the instance.
+#
+# The correct calls use the most confident instance, which shows what a clear
+# signal looks like. The errors use the one nearest the decision boundary, which
+# shows where the reasoning gives way — a confident miss would only say "it was
+# badly wrong", while a near miss shows the actual margin. Picking the boundary
+# case for every quadrant, as an earlier version did, makes all four look the
+# same and teaches nothing.
+CASES = [
+    ("true_positive", 1, 1, "Machine-written, correctly flagged", "confident"),
+    ("true_negative", 0, 0, "Human-written, correctly cleared", "confident"),
+    ("false_positive", 0, 1, "Human-written, wrongly flagged", "boundary"),
+    ("false_negative", 1, 0, "Machine-written, missed", "boundary"),
+]
 
 
-def build_examples(
-        model, tokenizer, device, X_test, y_test,
-        all_preds, all_probs, all_labels, with_shap=False,
-) -> None:
-    all_preds_arr = np.asarray(all_preds)
-    all_labels_arr = np.asarray(all_labels)
-    tp = np.where((all_labels_arr == 1) & (all_preds_arr == 1))[0]
-    tn = np.where((all_labels_arr == 0) & (all_preds_arr == 0))[0]
-    fp = np.where((all_labels_arr == 0) & (all_preds_arr == 1))[0]
-    fn = np.where((all_labels_arr == 1) & (all_preds_arr == 0))[0]
+def build_examples(generator: str) -> None:
+    from app.services.detector_service import get_detector_service
+    from app.services.xai_service import run_analysis
 
-    picks = [
-        ("True Positive — fake correctly detected", tp[0] if len(tp) else 0),
-        ("True Negative — real correctly detected", tn[0] if len(tn) else 1),
-        ("False Positive — real misclassified as fake", fp[0] if len(fp) else 2),
-        ("False Negative — fake missed by the model", fn[0] if len(fn) else 3),
-    ]
+    ds = get_detector_service()
+    ds.warmup()
 
-    predictor = make_predictor(model, tokenizer, device, tc.MAX_LENGTH, tc.BATCH_SIZE)
-    explainer = LimeTextExplainer(
-        class_names=["Real", "Fake"], split_expression=r"\W+", random_state=tc.RANDOM_SEED
-    )
-    shap_explainer = _make_shap_explainer(predictor) if with_shap else None
+    _, test, _ = build([generator])
+    scored = [(run_analysis(r.text), r) for r in test]
 
-    examples = []
-    for title, idx in picks:
-        text = X_test[int(idx)]
-        true_label = int(y_test[int(idx)])
-        pred_label = int(all_preds[int(idx)])
-        fake_prob = float(all_probs[int(idx)])
-        truncated = " ".join(text.split()[:100])
-
-        exp = explainer.explain_instance(
-            text, predictor,
-            num_features=tc.LIME_NUM_FEATURES,
-            num_samples=tc.LIME_NUM_SAMPLES,
-            labels=[1],
-        )
-        lime_features = exp.as_list(label=1)
-        ig_tokens, ig_attrs = get_ig_attributions(
-            text, target_class=1, model=model, tokenizer=tokenizer, device=device
-        )
-        rc = generate_reason_codes(
-            text=text, true_label=true_label, predicted=pred_label,
-            fake_prob=fake_prob, lime_exp=exp,
-            ig_tokens=ig_tokens, ig_attrs=ig_attrs,
-        )
-
-        shap_data = None
-        if shap_explainer is not None:
-            try:
-                sv = shap_explainer([truncated])
-                vals = sv[0].values
-                vals = vals[:, 1] if vals.ndim == 2 else vals
-                shap_data = {
-                    "tokens": list(sv[0].data),
-                    "values": [float(v) for v in vals],
-                }
-            except Exception as exc:  # noqa: BLE001
-                print(f"  [SHAP for '{title[:40]}' failed: {exc}]")
-
-        examples.append(
-            {
-                "title": title,
-                "text": text,
-                "true_label": true_label,
-                "model_pred": pred_label,
-                "fake_prob": fake_prob,
-                "reason_codes": reason_code_items(rc),
-                "summary": rc.summary,
-                "highlighted_html": build_highlighted_html(text, lime_features),
-                "lime_features": [
-                    {"word": w, "weight": float(weight)} for w, weight in lime_features
-                ],
-                "ig_tokens": ig_tokens,
-                "ig_attrs": [float(a) for a in ig_attrs],
-                "shap": shap_data,
-            }
-        )
-        print(
-            f"  Example '{title}': pred={'Fake' if pred_label else 'Real'} "
-            f"(true={'Fake' if true_label else 'Real'})"
-        )
+    examples, missing = [], []
+    for key, true_label, pred_label, title, pick in CASES:
+        pool = [(r, res) for res, r in scored
+                if r.label == true_label and res["predicted"] == pred_label]
+        if not pool:
+            # A missing quadrant is a result, not a failure to fill the page: no
+            # false positives means the detector flagged no real reviewer at this
+            # operating point. Say so rather than quietly showing three cases.
+            missing.append({"key": key, "title": title})
+            print(f"  [{key}] none in the held-out split — {title}")
+            continue
+        if pick == "confident":
+            rec, res = max(pool, key=lambda p: abs(p[1]["machine_prob"] - 0.5))
+        else:
+            rec, res = min(pool, key=lambda p: abs(p[1]["machine_prob"] - ds.threshold))
+        examples.append({
+            "key": key,
+            "title": title,
+            "text": rec.text,
+            "condition": rec.condition,
+            "true_label": true_label,
+            "model_pred": pred_label,
+            "machine_prob": res["machine_prob"],
+            "threshold": res["threshold"],
+            "highlighted_html": res["highlighted_html"],
+            "reason_codes": res["reason_codes"],
+            "features": res["features"][:8],
+            "summary": res["summary"],
+        })
+        print(f"  [{key}] P(machine)={res['machine_prob']:.3f} "
+              f"(threshold {res['threshold']:.3f})")
 
     tc.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    path = tc.DATA_DIR / "examples.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"examples": examples}, f, ensure_ascii=False, indent=2)
-    print(f"Examples saved -> {path}")
+    with open(tc.EXAMPLES_PATH, "w", encoding="utf-8") as f:
+        json.dump({
+            "generator": generator,
+            "threshold": round(ds.threshold, 5),
+            "n_evaluated": len(test),
+            "missing_cases": missing,
+            "examples": examples,
+        }, f, ensure_ascii=False, indent=2)
+    print(f"Examples saved -> {tc.EXAMPLES_PATH}")
+
+
+def main(argv=None) -> None:
+    p = argparse.ArgumentParser(description="Build the Examples page data.")
+    p.add_argument("--generator", default="mimo-v2.5-rerun")
+    args = p.parse_args(argv)
+    build_examples(args.generator)
+
+
+if __name__ == "__main__":
+    main()

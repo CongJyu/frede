@@ -1,213 +1,166 @@
-"""Per-request analysis: predict + LIME + Integrated Gradients + Reason Codes.
+"""Per-request analysis for the machine-generated-review detector.
 
-This is the port of notebook Phase 4 Part 1 (`predict_and_explain`), with the
-highlighted HTML and reason codes produced server-side and returned as JSON.
-SHAP is intentionally NOT computed here (minutes per review on CPU); precomputed
-SHAP lives on the Examples page instead.
+Two levels of explanation, both exact rather than sampled:
+
+- **Token level** — every token's probability under the reference LM. This is
+  not a surrogate: it is the same quantity the detector reads, so a highlighted
+  token is directly part of the evidence, not an approximation of it.
+- **Feature level** — SHAP values from the gradient-boosted classifier's own
+  trees, computed exactly in ~30 ms.
+
+The previous pipeline ran LIME with 150 samples per request and Integrated
+Gradients over a transformer, costing 3–8 s and explaining a surrogate fit
+around the model. Neither is needed here: the model is small and its features
+are already interpretable, so the whole request lands well under a second.
+
+Token highlighting marks **high-probability** tokens — text the reference model
+found predictable is the machine-authored signature, so red means "predictable".
+Note this is the opposite convention to the removed sentiment pipeline, where
+red meant "pushes toward fake".
 """
 from __future__ import annotations
 
 import html
-import re
+import math
 import time
 
 import numpy as np
-import torch
-from captum.attr import IntegratedGradients
 
 from .. import config
-from ..preprocess import preprocess
-from ..reason_codes import REASON_CODES, generate_reason_codes, reason_code_items
-from .model_service import get_model_service
+from ..reason_codes import generate_reason_codes, reason_code_items
+from .detector_service import get_detector_service
+
+# Tokens at or above this probability are predictable enough to be worth
+# marking; below it they are ordinary words carrying ordinary information.
+_HIGHLIGHT_FLOOR = 0.30
 
 
-def _get_embedding_layer(model):
-    """Return the word-embedding module, regardless of the base architecture."""
-    for name in ("distilbert", "roberta", "bert"):
-        sub = getattr(model, name, None)
-        if sub is not None:
-            return sub.embeddings
-    for mod in model.modules():
-        if isinstance(mod, torch.nn.Embedding):
-            return mod
-    raise RuntimeError("Could not locate an embedding layer on the model")
+def _readable(token: str) -> str:
+    """GPT-2 byte-level tokens to display text (`Ġ` is a leading space)."""
+    return token.replace("Ġ", " ").replace("Ċ", "\n")
 
 
-def get_ig_attributions(
-    text: str,
-    target_class: int = 1,
-    n_steps: int = config.IG_N_STEPS,
-    *,
-    model=None,
-    tokenizer=None,
-    device=None,
-) -> tuple[list[str], np.ndarray]:
-    """Token-level Integrated Gradients via Captum, L2-normalised.
+def build_highlighted_html(tokens: list[str], logprobs: list[float],
+                           max_tokens: int = 400) -> str:
+    """Colour each token by how predictable the reference model found it.
 
-    Defaults to the process-wide ModelService singleton; pass `model` /
-    `tokenizer` / `device` explicitly to reuse an in-memory (freshly trained)
-    model instead. Returns (tokens, attributions) where positive attribution
-    pushes toward the target class (Fake).
-
-    Uses `captum.attr.IntegratedGradients` over explicitly-computed word
-    embeddings (equivalent to LayerIntegratedGradients on the embedding layer,
-    but avoiding a captum 0.9 `_extract_device` regression that crashes when the
-    embedding hook receives a None `input_ids`).
+    `logprobs[i]` is log p(token_i | token_<i). Red intensity tracks the
+    probability, so the strongest marks are the words the model would itself
+    have chosen — the visible shape of machine authorship.
     """
-    if model is None:
-        ms = get_model_service()
-        model, tokenizer, device = ms.model, ms.tokenizer, ms.device
-    model.eval()
-
-    enc = tokenizer(
-        text,
-        truncation=True,
-        padding="max_length",
-        max_length=config.MAX_LENGTH,
-        return_tensors="pt",
-    )
-    input_ids = enc["input_ids"].to(device)
-    attention_mask = enc["attention_mask"].to(device)
-    baseline_ids = torch.zeros_like(input_ids)  # all [PAD]
-
-    embedding_layer = _get_embedding_layer(model)
-    input_embeds = embedding_layer(input_ids)
-    baseline_embeds = embedding_layer(baseline_ids)
-
-    def forward_func(embeds, attention_mask):
-        outputs = model(inputs_embeds=embeds, attention_mask=attention_mask)
-        return torch.softmax(outputs.logits.float(), dim=-1)[:, target_class]
-
-    ig = IntegratedGradients(forward_func)
-    attributions, _ = ig.attribute(
-        inputs=input_embeds,
-        baselines=baseline_embeds,
-        additional_forward_args=(attention_mask,),
-        n_steps=n_steps,
-        return_convergence_delta=True,
-    )
-
-    # Sum over embedding dim to (seq_len,), then drop padding tokens.
-    attr = attributions.squeeze(0).sum(dim=-1).detach().cpu().numpy()
-    mask = attention_mask.squeeze(0).cpu().numpy().astype(bool)
-    tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze(0).cpu().numpy())
-    tokens = [t for t, m in zip(tokens, mask) if m]
-    attr = attr[mask]
-
-    norm = np.linalg.norm(attr)
-    attr = attr / (norm + 1e-10)
-    return tokens, attr
-
-
-def build_highlighted_html(text: str, lime_features: list) -> str:
-    """Word-level LIME highlighting, HTML-escaped before embedding."""
-    word_weights = {word.lower(): weight for word, weight in lime_features}
-    max_abs = max((abs(w) for _, w in lime_features), default=1.0)
+    if not tokens:
+        return '<p style="color:#888">Not enough text to score.</p>'
 
     parts = [
         '<div style="font-size:16px; line-height:2.2; '
-        'font-family:Arial,sans-serif; padding:10px;">'
+        'font-family:Georgia,serif; padding:10px; white-space:pre-wrap;">'
     ]
-    for token in text.split():
-        esc = html.escape(token)
-        clean_tok = re.sub(r"[^a-z]", "", token.lower())
-        if clean_tok in word_weights:
-            w = word_weights[clean_tok]
-            intensity = min(abs(w) / (max_abs + 1e-10), 1.0)
-            alpha = 0.2 + 0.6 * intensity
-            if w > 0:  # pushes toward fake
-                color = f"rgba(220, 50, 50, {alpha:.3f})"
-                border = "2px solid rgba(220,50,50,0.6)"
-            else:      # pushes toward real
-                color = f"rgba(50, 130, 220, {alpha:.3f})"
-                border = "2px solid rgba(50,130,220,0.6)"
+    for token, lp in list(zip(tokens, logprobs))[:max_tokens]:
+        text = html.escape(_readable(token))
+        if not text:
+            continue
+        prob = math.exp(min(0.0, lp))
+        if prob >= _HIGHLIGHT_FLOOR:
+            intensity = min((prob - _HIGHLIGHT_FLOOR) / (1 - _HIGHLIGHT_FLOOR), 1.0)
+            alpha = 0.15 + 0.7 * intensity
             parts.append(
-                f'<span style="background:{color}; border-bottom:{border}; '
-                f"padding:2px 5px; border-radius:4px; margin:1px; "
-                f'display:inline-block" title="LIME weight: {w:+.4f}">{esc}</span>'
+                f'<span style="background:rgba(200,40,40,{alpha:.3f}); '
+                f'border-radius:3px; padding:1px 2px;" '
+                f'title="p={prob:.3f} — the reference model expected this word">'
+                f"{text}</span>"
             )
         else:
-            parts.append(
-                f'<span style="padding:2px 3px; display:inline-block">{esc}</span>'
-            )
+            parts.append(text)
     parts.append("</div>")
     parts.append(
         '<p style="font-size:12px; color:#666; margin-top:8px;">'
-        "Red = pushes toward FAKE | "
-        "Blue = pushes toward REAL | Hover for LIME weight</p>"
+        "Red = the reference language model found this word predictable. "
+        "Machine-written text scores high across the whole review; "
+        "hover a token for its probability.</p>"
     )
     return "".join(parts)
 
 
+def _feature_table(result: dict, ds) -> list[dict]:
+    """Features sorted by how much each moved this decision."""
+    rows = []
+    for name, value in result["features"].items():
+        shap_value = result["shap"].get(name, 0.0)
+        pct = ds.human_percentile(name, value)
+        rows.append({
+            "name": name,
+            "value": round(float(value), 6),
+            "human_percentile": None if pct is None else round(pct, 1),
+            "shap": round(float(shap_value), 5),
+            # Positive SHAP pushes toward machine; the UI colours on this.
+            "direction": "machine" if shap_value > 0 else "human",
+        })
+    rows.sort(key=lambda r: -abs(r["shap"]))
+    return rows
+
+
+def _scope_note(generators: list[str]) -> str:
+    names = ", ".join(generators) if generators else "an unknown generator"
+    if len(generators) <= 1:
+        return (
+            f"Trained on machine-written reviews from a single generator "
+            f"({names}). Scores are trustworthy against that generator; "
+            f"cross-generator generalisation is not yet measured."
+        )
+    return f"Trained on machine-written reviews from: {names}."
+
+
 def run_analysis(review_text: str) -> dict:
-    """Full pipeline: preprocess, predict, LIME, IG, reason codes, HTML."""
     start = time.time()
-    ms = get_model_service()
+    ds = get_detector_service()
 
     if not review_text or not review_text.strip():
         return {
-            "prediction": "N/A",
-            "predicted": -1,
-            "fake_prob": 0.0,
-            "confidence": 0.0,
-            "lime_features": [],
-            "ig_tokens": [],
-            "ig_attrs": [],
+            "prediction": "N/A", "predicted": -1, "machine_prob": 0.0,
+            "confidence": 0.0, "flagged": False, "threshold": ds.threshold,
+            "features": [], "tokens": [], "logprobs": [],
             "highlighted_html": "<p>Please enter a review.</p>",
-            "reason_codes": [],
-            "summary": "No text provided.",
-            "elapsed_ms": 0,
+            "reason_codes": [], "summary": "No text provided.",
+            "elapsed_ms": 0, "scope_note": _scope_note(ds.generators),
         }
 
-    cleaned = preprocess(review_text)
+    result = ds.score(review_text)
+    prob = result["prob"]
+    # The verdict is taken at the threshold calibrated to hold false positives
+    # on real reviews at 1%, not at 0.5. A 0.5 boundary carries no FPR guarantee
+    # — on this detector it implies roughly an order of magnitude more false
+    # accusations — so using it would state a verdict the model never promised.
+    predicted = int(prob >= ds.threshold)
 
-    probs = ms.predict_proba([cleaned])[0]
-    pred_label = int(np.argmax(probs))
-    fake_prob = float(probs[1])
-    confidence = fake_prob if pred_label == 1 else 1 - fake_prob
-
-    exp = ms.lime_explainer.explain_instance(
-        cleaned,
-        ms.predict_proba,
-        num_features=config.LIME_NUM_FEATURES,
-        num_samples=config.LIME_NUM_SAMPLES,
-        labels=[1],
-    )
-    lime_features = exp.as_list(label=1)
-
-    ig_tokens, ig_attrs = get_ig_attributions(cleaned, target_class=1)
-
+    percentiles = {c: ds.human_percentile(c, v) for c, v in result["features"].items()}
     rc = generate_reason_codes(
-        text=cleaned,
-        true_label=-1,  # unknown in real usage
-        predicted=pred_label,
-        fake_prob=fake_prob,
-        lime_exp=exp,
-        ig_tokens=ig_tokens,
-        ig_attrs=ig_attrs,
+        features=result["features"],
+        percentiles=percentiles,
+        shap=result["shap"],
+        machine_prob=prob,
+        predicted=predicted,
+        cut=config.RC_PERCENTILE_CUT,
+        threshold=ds.threshold,
     )
 
     return {
-        "prediction": "FAKE" if pred_label == 1 else "REAL",
-        "predicted": pred_label,
-        "fake_prob": fake_prob,
-        "confidence": confidence,
-        "lime_features": [
-            {"word": word, "weight": float(weight)} for word, weight in lime_features
-        ],
-        "ig_tokens": ig_tokens,
-        "ig_attrs": [float(a) for a in ig_attrs],
-        "highlighted_html": build_highlighted_html(cleaned, lime_features),
+        "prediction": "MACHINE" if predicted == 1 else "HUMAN",
+        "predicted": predicted,
+        "machine_prob": round(prob, 5),
+        "confidence": round(prob if predicted == 1 else 1 - prob, 5),
+        # Identical to `predicted` by construction; kept as a separate field
+        # because the UI states it in terms of the operating guarantee.
+        "flagged": predicted == 1,
+        "threshold": round(ds.threshold, 5),
+        "features": _feature_table(result, ds),
+        "tokens": result["tokens"],
+        "logprobs": [round(v, 5) for v in result["logprobs"]],
+        "highlighted_html": build_highlighted_html(result["tokens"], result["logprobs"]),
         "reason_codes": reason_code_items(rc),
         "summary": rc.summary,
         "elapsed_ms": int((time.time() - start) * 1000),
+        "scope_note": _scope_note(ds.generators),
     }
 
 
-# Re-export for convenience (used by the HITL pool builder too).
-__all__ = [
-    "run_analysis",
-    "get_ig_attributions",
-    "build_highlighted_html",
-    "get_model_service",
-]
+__all__ = ["run_analysis", "build_highlighted_html", "get_detector_service"]

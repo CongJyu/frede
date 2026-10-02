@@ -4,7 +4,7 @@ Port of notebook Phase 2 (RoBERTa fine-tuning), with distilbert-base-uncased and
 a plain-PyTorch loop. Entrypoint for `make train` / `make smoke`.
 
     python -m training.train [--sample N] [--epochs N] [--max_len N]
-                             [--device cpu|mps] [--with-shap]
+                             [--device cpu|mps]
 """
 from __future__ import annotations
 
@@ -179,10 +179,12 @@ def train(args: argparse.Namespace):
             tokenizer.save_pretrained(tc.OUTPUT_DIR)
             print(f"  ✓ best model saved (val F1={best_f1:.4f})")
 
-    # Test-set evaluation + probabilities (needed by HITL pool / examples).
+    # Test-set evaluation. Predictions and probabilities are reported for the
+    # checkpoint's own record; the Stage 4 artifacts are built separately by
+    # `make stage4`, because they belong to the current detector rather than to
+    # this archived sentiment-proxy model.
     test_loader = build_loader(X_test, y_test, tokenizer, args.max_len, args.batch)
     test_loss, test_f1, all_preds, all_labels = run_epoch(model, test_loader, device, desc="Test")
-    all_probs = predict_probs(model, tokenizer, device, X_test, args.max_len, args.batch)
     print(f"Test loss {test_loss:.4f} | Test F1 {test_f1:.4f}")
 
     tc.MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -207,44 +209,8 @@ def train(args: argparse.Namespace):
             indent=2,
         )
 
-    return model, tokenizer, device, (X_test, y_test), (all_preds, all_labels), all_probs
+    return model, tokenizer, device, (X_test, y_test), (all_preds, all_labels)
 
-
-def _extras_only(args: argparse.Namespace) -> None:
-    """Rebuild HITL pool + examples from the saved checkpoint (no retraining)."""
-    import pandas as pd
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-    from . import examples, hitl_pool
-
-    if not tc.OUTPUT_DIR.exists():
-        raise SystemExit(f"No saved model at {tc.OUTPUT_DIR}. Run `make train` first.")
-
-    split_df = pd.read_csv(tc.DATA_DIR / "splits.csv")
-    test_df = split_df[split_df["split"] == "test"]
-    X_test = test_df["text"].tolist()
-    y_test = test_df["label"].astype(int).tolist()
-
-    device = torch.device(args.device)
-    if device.type == "cpu":
-        torch.set_num_threads(tc.NUM_THREADS)
-
-    tokenizer = AutoTokenizer.from_pretrained(str(tc.OUTPUT_DIR))
-    model = AutoModelForSequenceClassification.from_pretrained(str(tc.OUTPUT_DIR))
-    model.to(device)
-    model.eval()
-
-    all_probs = predict_probs(model, tokenizer, device, X_test, args.max_len, args.batch)
-    all_preds = (all_probs >= 0.5).astype(int).tolist()
-    all_labels = y_test
-
-    hitl_pool.build_hitl_pool(model, tokenizer, device, X_test, y_test, all_preds, all_probs)
-    examples.build_examples(
-        model, tokenizer, device, X_test, y_test,
-        all_preds, all_probs, all_labels,
-        with_shap=args.with_shap,
-    )
-    print("== extras regeneration complete ==")
 
 
 def main(argv=None) -> None:
@@ -256,33 +222,12 @@ def main(argv=None) -> None:
     parser.add_argument("--lr", type=float, default=tc.LEARNING_RATE)
     parser.add_argument("--device", default=tc.DEVICE, choices=["cpu", "mps"])
     parser.add_argument("--base-model", default=tc.BASE_MODEL_NAME)
-    parser.add_argument("--skip-extras", action="store_true",
-                        help="skip HITL pool + examples (training only)")
-    parser.add_argument("--with-shap", action="store_true",
-                        help="precompute SHAP for the Examples page (slow on CPU)")
-    parser.add_argument("--extras-only", action="store_true",
-                        help="skip training; rebuild HITL pool + examples from the saved model")
     args = parser.parse_args(argv)
 
-    if args.extras_only:
-        _extras_only(args)
-        return
-
-    model, tokenizer, device, (X_test, y_test), (all_preds, all_labels), all_probs = train(args)
-
-    if not args.skip_extras:
-        from . import examples, hitl_pool
-
-        hitl_pool.build_hitl_pool(
-            model, tokenizer, device, X_test, y_test, all_preds, all_probs
-        )
-        examples.build_examples(
-            model, tokenizer, device, X_test, y_test,
-            all_preds, all_probs, all_labels,
-            with_shap=args.with_shap,
-        )
+    train(args)
 
     print("== training complete ==")
+
 
 
 if __name__ == "__main__":

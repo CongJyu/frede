@@ -12,28 +12,35 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config
 from .routers import analyze, examples, hitl
-from .services.model_service import get_model_service
+from .services.detector_service import get_detector_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Eager model load at startup (absorb the ~10–30 s load into startup, not
-    # the first request). Run in the executor so the event loop stays free.
-    ms = get_model_service()
+    # Eager load at startup (absorb the model load into startup, not the first
+    # request). Run in the executor so the event loop stays free.
+    loop = asyncio.get_running_loop()
+    ds = get_detector_service()
     try:
-        await asyncio.get_running_loop().run_in_executor(None, ms.warmup)
-        print(f"[frede] model ready (device={ms.device})")
+        await loop.run_in_executor(None, ds.warmup)
+        print(f"[frede] detector ready ({len(ds.features)} features, "
+              f"generators={ds.generators})")
     except Exception as exc:  # noqa: BLE001
         # Don't crash the server; /api/health surfaces the error.
-        print(f"[frede] model warmup FAILED: {exc}")
+        print(f"[frede] detector warmup FAILED: {exc}")
+
+    # The sentiment-proxy model the previous study used is no longer loaded:
+    # nothing serves it now that HITL and Examples run on the current detector.
+    # `make train` still produces it under models/fake_review_distilbert for
+    # reference, but the app does not depend on it.
     yield
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Frede — Fake Restaurant Review Detector",
-        description="Fine-tuned transformer + LIME / Integrated Gradients / Reason Codes.",
-        version="0.1.0",
+        title="Frede — Machine-Generated Review Detector",
+        description="GPT-2 surprisal + stylometric features, SHAP and reason codes.",
+        version="0.2.0",
         lifespan=lifespan,
     )
 
@@ -43,11 +50,13 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict:
-        ms = get_model_service()
+        ds = get_detector_service()
         return {
-            "status": "ready" if ms.ready else "loading",
-            "model": config.MODEL_NAME,
-            "error": ms.error,
+            "status": "ready" if ds.ready else "loading",
+            "model": "stage2_detector",
+            "features": len(ds.features),
+            "generators": ds.generators,
+            "error": ds.error,
         }
 
     @app.middleware("http")
