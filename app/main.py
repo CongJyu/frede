@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="Frede — Machine-Generated Review Detector",
+        title="Frede - Fake (Machine-Generated) Review Detector",
         description="GPT-2 surprisal + stylometric features, SHAP and reason codes.",
         version="0.2.0",
         lifespan=lifespan,

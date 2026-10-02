@@ -69,7 +69,7 @@ export default function Analyzer() {
   return (
     <div>
       <Title level={2} style={{ marginTop: 4 }}>
-        Machine-Generated Review Detector
+        Frede - Fake (Machine-Generated) Review Detector
       </Title>
       <Paragraph type="secondary">
         Paste a review to see whether it was <strong>written by a person</strong> or{' '}
